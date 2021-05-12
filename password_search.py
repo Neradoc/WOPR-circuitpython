@@ -1,4 +1,5 @@
 import board
+import busio
 from digitalio import DigitalInOut, Pull
 import neopixel
 import random
@@ -20,7 +21,8 @@ buttons = [
 	[but2,"BUT2"],
 ]
 
-i2c = board.I2C()
+# i2c = board.I2C()
+i2c = busio.I2C(sda=board.SDA, scl=board.SCL, frequency=400_000)
 i2c.try_lock()
 scan = [hex(x) for x in i2c.scan()]
 print(scan)
@@ -78,17 +80,19 @@ def make_password():
 	return passe
 
 """
-REVEAL_REAL
-	single real password, reveal one letter at each round
-FIND_RANDOM
-	put the scrolling character at the random position into the password and reveal
-FIND_REAL
-	single real password, reveal when the scrolling character matches the password
-FIND_REAL_RANDOM
-	FIND_REAL but when the password is decoded, generate new random password
+FIND:
+	when thea scrolling character matches a password character, reveal
+RANDOM:
+	randomly generate then password when revealed
+AUTO:
+	automatic reveal of a character from the password on every outer loop
 """
-mode = "FIND_REAL_RANDOM"
-CHANCES_DECODING = 0.4
+mode = ["FIND", "RANDOM"]
+SPEED_DELAY = 0.01
+FREQUENCY_DECODING = 1 # Hz
+CHANCES_DECODING = len(charas) * FREQUENCY_DECODING * SPEED_DELAY / 4
+
+print("CHANCES_DECODING",CHANCES_DECODING)
 
 # fixed password
 password = [x for x in "MOUTARDE 007"]
@@ -96,42 +100,68 @@ if "RANDOM" in mode:
 	password = make_password()
 #
 screen_texte = [random.choice(charas) for x in range(12)]
+ring = 0
 not_decoded = set(range(12))
+defcon = 0
+start_time = time.monotonic_ns()
 
 while True:
-	for x in range(6):
-		# scroll
-		screen_texte = screen_texte[1:] + [random.choice(charas)]
-		#
-		for index,segment in enumerate(display):
-			for char in range(4):
-				pos = index*4+char
+	# scroll
+	ring = (ring + 1) % 12
+	screen_texte[ring] = random.choice(charas)
+	#
+	buff = ["."] * 12
+	for index,segment in enumerate(display):
+		still_coded = False
 
-				if "FIND_REAL" in mode:
-					if screen_texte[pos] == password[pos]\
-						and random.random() < CHANCES_DECODING:
-						if pos in not_decoded:
-							not_decoded.remove(pos)
-							screen_texte[pos] = "*"
+		for char in range(4):
+			pos = index*4+char
 
-				if pos in not_decoded:
-					segment[char] = screen_texte[pos]
-				else:
-					segment[char] = password[pos]
+			# reveal password characters that match the scrolling text
+			if "FIND" in mode:
+				if screen_texte[(ring+pos)%12] == password[pos]\
+					and random.random() < CHANCES_DECODING:
+					if pos in not_decoded:
+						not_decoded.remove(pos)
+						# a character can only match once
+						screen_texte[(ring+pos)%12] = "*"
+						# force update the segment in case it's all decoded
+						still_coded |= True
 
-		# buttons do nothing for now
-		for btn in buttons:
-			if btn[0].value:
-				if btn[0] == but2:
-					num = random.choice(list(not_decoded))
-					not_decoded.remove(num)
-					while but2.value:
-						time.sleep(0.01)
-				print(btn[1])
-		time.sleep(0.05)
+			# display scrolling or decoded character
+			if pos in not_decoded:
+				still_coded |= True
+				buff[pos] = screen_texte[(ring+pos)%12]
+			else:
+				buff[pos] = password[pos]
 
+		# send I2C only once per segment, if it's not finished
+		if still_coded:
+			segment.print("".join(buff[index*4:index*4+4]))
+
+	# buttons
+	for btn in buttons:
+		if btn[0].value:
+			# button 2 speeds up decoding
+			if btn[0] == but2:
+				num = random.choice(list(not_decoded))
+				not_decoded.remove(num)
+				screen_texte[(ring+num)%12] = "*"
+				while but2.value:
+					time.sleep(0.01)
+			# button 1 resets
+			if btn[0] == but1:
+				not_decoded = set(range(12))
+				while but1.value:
+					time.sleep(0.01)
+			print(btn[1])
+
+	# password decoded
 	if len(not_decoded) == 0:
-		print("The password was:","".join(password))
+		end_time = time.monotonic_ns()
+		took = (end_time - start_time) // 1000 // 1000 / 1000
+		print("The password was:","".join(password),f"decoded in {took:.3f} s")
+		#
 		for x in range(4):
 			pixels.brightness = 0.01
 			pixels.show()
@@ -140,19 +170,25 @@ while True:
 			pixels.show()
 			time.sleep(0.25)
 		not_decoded = set(range(12))
-		if mode == "FIND_REAL_RANDOM":
+
+		if "RANDOM" in mode:
 			password = make_password()
+
+		start_time = time.monotonic_ns()
 	else:
-		if "FIND_REAL" not in mode:
+		# decode a random character
+		if "AUTO" in mode:
 			num = random.choice(list(not_decoded))
 			not_decoded.remove(num)
-			if mode == "FIND_RANDOM":
-				# find random password:
-				password[num] = screen_texte[num]
 
-	defcon = len(not_decoded) / 2
-	pixels.fill(0)
-	for x in range(5):
-		if x >= defcon - 1:
-			pixels[x] = colors[x]
-	pixels.show()
+	# display the progression of decoding via defcon LEDs
+	dd = len(not_decoded) / 2
+	if defcon != dd:
+		defcon = dd
+		pixels.fill(0)
+		for x in range(5):
+			if x >= defcon - 1:
+				pixels[x] = colors[x]
+		pixels.show()
+
+	time.sleep(SPEED_DELAY)
