@@ -1,9 +1,8 @@
-import time, gc, os
-import neopixel
 import board
 from digitalio import DigitalInOut, Pull
-import tinys2
+import neopixel
 import random
+import time
 
 butA = DigitalInOut(board.IO38)
 butA.switch_to_input(Pull.DOWN)
