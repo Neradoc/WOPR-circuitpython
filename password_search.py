@@ -4,6 +4,7 @@ from digitalio import DigitalInOut, Pull
 import os
 import random
 import time
+import wifi
 
 import adafruit_ht16k33.segments
 import neopixel
@@ -21,6 +22,12 @@ DICT:
 MODES = ["FIND", "RANDOM", "DICT"]
 SPEED_DELAY = 0.01
 TIME_DECODING = 12
+
+####################################################################
+# setup wifi
+####################################################################
+
+wifi.radio.enabled = False
 
 ####################################################################
 # setup buttons
@@ -43,7 +50,7 @@ buttons = [
 ]
 
 ####################################################################
-# setup displays an blinkies
+# setup displays and blinkies
 ####################################################################
 
 i2c = busio.I2C(sda=board.SDA, scl=board.SCL, frequency=400_000)
