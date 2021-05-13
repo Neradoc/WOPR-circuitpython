@@ -1,9 +1,30 @@
 import board
 import busio
 from digitalio import DigitalInOut, Pull
-import neopixel
+import os
 import random
 import time
+
+import adafruit_ht16k33.segments
+import neopixel
+
+"""
+FIND:
+	when thea scrolling character matches a password character, reveal
+RANDOM:
+	randomly generate then password when revealed
+AUTO:
+	automatic reveal of a character from the password on every outer loop
+DICT:
+	get new password from the dictionnary of 12 letters words
+"""
+MODES = ["FIND", "RANDOM", "DICT"]
+SPEED_DELAY = 0.01
+TIME_DECODING = 12
+
+####################################################################
+# setup buttons
+####################################################################
 
 butA = DigitalInOut(board.IO38)
 butA.switch_to_input(Pull.DOWN)
@@ -21,15 +42,11 @@ buttons = [
 	[but2,"BUT2"],
 ]
 
-# i2c = board.I2C()
+####################################################################
+# setup displays an blinkies
+####################################################################
+
 i2c = busio.I2C(sda=board.SDA, scl=board.SCL, frequency=400_000)
-i2c.try_lock()
-scan = [hex(x) for x in i2c.scan()]
-print(scan)
-i2c.unlock()
-
-import adafruit_ht16k33.segments
-
 display = [
 	adafruit_ht16k33.segments.Seg14x4(i2c, address=0x70),
 	adafruit_ht16k33.segments.Seg14x4(i2c, address=0x72),
@@ -56,6 +73,10 @@ for x in range(2):
 		segment.fill(0)
 		time.sleep(0.1)
 
+####################################################################
+# setup words and passwords
+####################################################################
+
 vowels = "AEIOUY"
 conson = "ZQWSXCDFRVBGTHNJKLPM"
 lower_letters = "azertyuiopmlkjhgfdsqwxcvbn"
@@ -79,31 +100,47 @@ def make_password():
 				passe.append(random.choice(vowels))
 	return passe
 
-"""
-FIND:
-	when thea scrolling character matches a password character, reveal
-RANDOM:
-	randomly generate then password when revealed
-AUTO:
-	automatic reveal of a character from the password on every outer loop
-"""
-mode = ["FIND", "RANDOM"]
-SPEED_DELAY = 0.01
-FREQUENCY_DECODING = 1 # Hz
-CHANCES_DECODING = len(charas) * FREQUENCY_DECODING * SPEED_DELAY / 4
+password_filename = "dict.txt"
+n_passwords = os.stat(password_filename)[6] // 13
+
+def password_from_dict():
+	pos_word = random.randint(0,n_passwords)
+	with open(password_filename,"r") as fp:
+		fp.seek(pos_word*13)
+		password = fp.read(12).upper()
+	return password
+
+def get_password():
+	if "DICT" in MODES:
+		password = password_from_dict()
+	else:
+		password = make_password()
+	return [x for x in password]
+
+####################################################################
+# setup loop variables and parameters
+####################################################################
+
+CHANCES_DECODING = len(charas) * SPEED_DELAY / 2 * (12 / TIME_DECODING)
+CHANCES_DECODING = max(0.1, min(1.0, CHANCES_DECODING))
+average_time = 0
 
 print("CHANCES_DECODING",CHANCES_DECODING)
 
 # fixed password
 password = [x for x in "MOUTARDE 007"]
-if "RANDOM" in mode:
-	password = make_password()
+if "RANDOM" in MODES:
+	password = get_password()
 #
 screen_texte = [random.choice(charas) for x in range(12)]
 ring = 0
 not_decoded = set(range(12))
 defcon = 0
 start_time = time.monotonic_ns()
+
+####################################################################
+# loop-dee-loop
+####################################################################
 
 while True:
 	# scroll
@@ -118,7 +155,7 @@ while True:
 			pos = index*4+char
 
 			# reveal password characters that match the scrolling text
-			if "FIND" in mode:
+			if "FIND" in MODES:
 				if screen_texte[(ring+pos)%12] == password[pos]\
 					and random.random() < CHANCES_DECODING:
 					if pos in not_decoded:
@@ -139,6 +176,7 @@ while True:
 		if still_coded:
 			segment.print("".join(buff[index*4:index*4+4]))
 
+	################################################################
 	# buttons
 	for btn in buttons:
 		if btn[0].value:
@@ -154,13 +192,25 @@ while True:
 				not_decoded = set(range(12))
 				while but1.value:
 					time.sleep(0.01)
-			print(btn[1])
+			print("Pressed", btn[1])
 
+	################################################################
 	# password decoded
 	if len(not_decoded) == 0:
 		end_time = time.monotonic_ns()
 		took = (end_time - start_time) // 1000 // 1000 / 1000
+		#
+		if average_time == 0:
+			average_time = took
+		else:
+			average_time = (average_time + 3 * took) / 4
+		if average_time < 0.85 * TIME_DECODING:
+			CHANCES_DECODING *= 1.02
+		if average_time > 1.15 * TIME_DECODING:
+			CHANCES_DECODING /= 1.02
+		#
 		print("The password was:","".join(password),f"decoded in {took:.3f} s")
+		print("Average:",average_time,"Chance:",CHANCES_DECODING)
 		#
 		for x in range(4):
 			pixels.brightness = 0.01
@@ -171,16 +221,18 @@ while True:
 			time.sleep(0.25)
 		not_decoded = set(range(12))
 
-		if "RANDOM" in mode:
-			password = make_password()
+		if "RANDOM" in MODES:
+			password = get_password()
 
 		start_time = time.monotonic_ns()
 	else:
+		############################################################
 		# decode a random character
-		if "AUTO" in mode:
+		if "AUTO" in MODES:
 			num = random.choice(list(not_decoded))
 			not_decoded.remove(num)
 
+	################################################################
 	# display the progression of decoding via defcon LEDs
 	dd = len(not_decoded) / 2
 	if defcon != dd:
