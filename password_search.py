@@ -82,7 +82,10 @@ conson = "ZQWSXCDFRVBGTHNJKLPM"
 lower_letters = "azertyuiopmlkjhgfdsqwxcvbn"
 upper_letters = vowels + conson
 digits = "0123456789"
-charas = "." "@#*$&+-=/:,?! " + upper_letters + digits + lower_letters
+symbols = "@#*$&+-=/:,?!"
+charas = symbols + upper_letters + digits + lower_letters
+
+passsymbols = "0123456789" "@*$+-="
 
 def make_password():
 	passe = [ random.choice(conson) ]
@@ -100,14 +103,46 @@ def make_password():
 				passe.append(random.choice(vowels))
 	return passe
 
-password_filename = "dict.txt"
-n_passwords = os.stat(password_filename)[6] // 13
+password_files = [["",0]] * 14
+password_sizes = set()
+for x in range(14):
+	filename = f"dicts/dict-{x}.txt"
+	try:
+		n_passwords = os.stat(filename)[6] // (x+1) # is gonna fail if not exists
+		password_files[x] = [filename,n_passwords]
+		password_sizes.add(x)
+	except OSError:
+		password_files[x] = ["",0]
 
 def password_from_dict():
-	pos_word = random.randint(0,n_passwords)
-	with open(password_filename,"r") as fp:
-		fp.seek(pos_word*13)
-		password = fp.read(12).upper()
+	# make sizes
+	full_size = 0
+	sizes = []
+	while full_size < 12 and 12 - full_size >= min(password_sizes):
+		size = random.choice([x for x in password_sizes if x <= 12 - full_size])
+		sizes.append(size)
+		full_size += size
+
+	password = ""
+	# a 33% chance to start with a number or symbol if not full
+	if full_size < 12 and random.random() < 0.33:
+		password += random.choice(passsymbols)
+		full_size += 1
+	# stick words
+	for size in sizes:
+		with open(password_files[size][0],"r") as fp:
+			pos_word = random.randint(0,password_files[size][1])
+			fp.seek( pos_word * ( size + 1 ) )
+			password += fp.read(size).upper()
+		# if not full, add separator
+		if full_size < 12:
+			password += random.choice(passsymbols)
+			full_size += 1
+	# if still not full, fill with numbers and symbols
+	while full_size < 12:
+		password += random.choice(passsymbols)
+		full_size += 1
+
 	return password
 
 def get_password():
