@@ -5,8 +5,10 @@ import os
 import random
 import rtc
 import struct
+import sys
 import time
 import wifi
+import usb_cdc
 
 import adafruit_ht16k33.segments
 import neopixel
@@ -17,6 +19,19 @@ SYNC_DELAY = 2 * 60 * 60 # 2h
 TZ_OFFSET = 3600 * 2
 NTP_SERVER = "pool.ntp.org"
 NTP_PORT = 123
+TIMEUTILS_SECONDS_1970_TO_2000 = 946_684_800
+
+####################################################################
+# setup prints
+####################################################################
+
+def log_info(*args):
+	# out = " ".join([arg if type(arg) == str else repr(arg) for arg in args]) + "\r\n"
+	# usb_cdc.data.write(out.encode("utf8"))
+	if usb_cdc.console is None and usb_cdc.data is None:
+		pass
+	else:
+		print(*args)
 
 ####################################################################
 # setup buttons
@@ -44,7 +59,6 @@ buttons = [
 
 pixels = neopixel.NeoPixel(board.IO7,5,auto_write = False)
 pixels.fill((0,0,0))
-pixels.brightness = 0.2
 pixels.show()
 
 colors = [
@@ -59,7 +73,7 @@ status = neopixel.NeoPixel(board.NEOPIXEL,1)
 status.fill((0,0,0))
 status_power = DigitalInOut(board.NEOPIXEL_POWER)
 status_power.switch_to_output()
-status_power.value = True
+status_power.value = False
 
 i2c = busio.I2C(sda=board.SDA, scl=board.SCL, frequency=400_000)
 display = [
@@ -95,6 +109,19 @@ def seg_print(label):
 		segment.print("".join(buff[index*4:index*4+4]))
 	seg_show()
 
+be_bright = False
+def update_brightness(now):
+	if now.tm_hour < 8 and not be_bright:
+		seg_brightness(0.01)
+		pixels.brightness = 0.01
+		status.brightness = 0.01
+	else:
+		seg_brightness(1)
+		pixels.brightness = 1
+		status.brightness = 1
+	pixels.show()
+	status.show()
+
 ####################################################################
 # setup wifi
 ####################################################################
@@ -108,14 +135,14 @@ def connect_wifi(verbose=False):
 	try:
 		from secrets import secrets
 	except ImportError:
-		print("WiFi secrets are kept in secrets.py, please add them there!")
+		log_info("WiFi secrets are kept in secrets.py, please add them there!")
 		raise
 	if verbose:
-		print("Connecting to ", secrets["ssid"])
+		log_info("Connecting to ", secrets["ssid"])
 	wifi.radio.connect(ssid=secrets["ssid"], password=secrets["password"])
 	socket_pool = socketpool.SocketPool(wifi.radio)
 	if verbose:
-		print("Connected with IP ", wifi.radio.ipv4_address)
+		log_info("Connected with IP ", wifi.radio.ipv4_address)
 
 def get_ntp_time(pool):
 	packet = bytearray(48)
@@ -131,19 +158,21 @@ def get_ntp_time(pool):
 		destination = time.monotonic_ns()
 
 	seconds = struct.unpack_from("!I", packet, offset=len(packet) - 8)[0]
-	monotonic_start = seconds - 2_208_988_800 - (destination // 1_000_000_000)
+	monotonic_start = seconds - 2_208_988_800 - (destination // 1_000_000_000) - TIMEUTILS_SECONDS_1970_TO_2000
 	return time.localtime(time.monotonic_ns() // 1_000_000_000 + monotonic_start + TZ_OFFSET)
 
 def update_NTP():
+	pixels.fill((0,128,255))
+	pixels.show()
 	seg_print(" UPDATE NTP ")
+	log_info("Update from NTP")
 	wifi.radio.enabled = True
+	log_info("Connect Wifi")
 	connect_wifi(verbose=True)
 	rtc.RTC().datetime = get_ntp_time(socket_pool)
 	time.sleep(0.1)
+	log_info("Turn off Wifi")
 	wifi.radio.enabled = False
-
-if time.localtime().tm_year < 2021:
-	update_NTP()
 
 ####################################################################
 # time functions
@@ -160,13 +189,55 @@ def update_time(show_separator = True):
 		sep = ""
 
 	day = week_days[now.tm_wday].upper()
+	daynum = f"{now.tm_mday:2d}"
 
-	display[0].print(f"{now.tm_hour:02d}{sep}{now.tm_min:02d}{sep}")
-	display[1].print(f"{now.tm_sec:02d} {day[0]}")
-	display[2].print(f"{day[1]}{day[2]}{now.tm_mday:02d}")
+	display[0].print(f"{day}{daynum[0]}")
+	display[1].print(f"{daynum[1]} {now.tm_hour:02d}{sep}")
+	display[2].print(f"{now.tm_min:02d}{sep}{now.tm_sec:02d}")
 	seg_show()
 
 	return now
+
+####################################################################
+# startup animation
+####################################################################
+
+pixels.brightness = 1
+pixels.show()
+seg_brightness(1)
+seg_show()
+
+now = time.localtime()
+if now.tm_year < 2021:
+	update_NTP()
+	now = time.localtime()
+
+update_brightness(now)
+
+log_info("Now is:",now)
+
+y = 0
+def pixcol():
+	global y
+	if pixels[4-y] == (0,0,0):
+		pixels[4-y] = (0,255,255)
+	else:
+		pixels[4-y] = (0,0,0)
+	pixels.show()
+	y = (y+1) % 5
+
+for x in range(2):
+	pixcol()
+	for segment in display:
+		segment.fill(1)
+		time.sleep(0.1)
+		segment.show()
+		pixcol()
+	for segment in display:
+		segment.fill(0)
+		time.sleep(0.1)
+		segment.show()
+		pixcol()
 
 ####################################################################
 # setup loop variables and parameters
@@ -174,42 +245,61 @@ def update_time(show_separator = True):
 
 defcon = 0
 next_sync = time.monotonic() + SYNC_DELAY
+last_b_update = 0
 
 ####################################################################
 # loop-dee-loop
 ####################################################################
 
-for x in range(2):
+index = 0
+try:
+	while True:
+		# scroll
+		now = update_time(index // 4 % 2 == 0)
+		defcon = now.tm_sec // 10
+
+		if now.tm_sec % 2 == 0:
+			status.fill(colors[now.tm_sec % 5])
+		else:
+			status.fill(0)
+
+		pixels.fill(0)
+		for x in range(5):
+			if x < defcon:
+				pixels[4 - x] = colors[x]
+			else:
+				pixels[4 - x] = 0
+		pixels.show()
+
+		index += 1
+		time.sleep(SPEED_DELAY)
+
+		if now.tm_min // 10 != last_b_update:
+			last_b_update = now.tm_min // 10
+			update_brightness(now)
+
+		if but1.value:
+			be_bright = not be_bright
+			update_brightness(now)
+			while but1.value:
+				time.sleep(0.1)
+
+		if but2.value or time.monotonic() > next_sync:
+			update_NTP()
+			next_sync = time.monotonic() + SYNC_DELAY
+
+except Exception as ex:
+	pixels.fill((255,0,0))
+	pixels.brightness = 1
+	pixels.show()
 	for segment in display:
 		segment.fill(1)
-		time.sleep(0.1)
-		segment.show()
-	for segment in display:
-		segment.fill(0)
-		time.sleep(0.1)
-		segment.show()
 
-index = 0
-while True:
-	# scroll
-	now = update_time(index // 4 % 2 == 0)
-	defcon = now.tm_sec // 10
-
-	if now.tm_sec % 2 == 0:
-		status.fill(colors[now.tm_sec % 5])
-	else:
-		status.fill(0)
-
-	pixels.fill(0)
-	for x in range(5):
-		if x < defcon:
-			pixels[4 - x] = colors[x]
+	while not but1.value:
+		if hasattr(sys,"print_exception"):
+			sys.print_exception(ex)
 		else:
-			pixels[4 - x] = 0
-	pixels.show()
+			log_info(ex)
+		time.sleep(0.5)
+	raise
 
-	index += 1
-	time.sleep(SPEED_DELAY)
-	
-	if but2.value or time.monotonic() > next_sync:
-		update_NTP()
