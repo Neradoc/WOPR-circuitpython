@@ -152,7 +152,8 @@ def get_ntp_time(pool):
 		packet[i] = 0
 
 	with pool.socket(pool.AF_INET, pool.SOCK_DGRAM) as sock:
-		sock.settimeout(None)
+		# have a timeout, or it might hang
+		sock.settimeout(2)
 		sock.sendto(packet, (NTP_SERVER, NTP_PORT))
 		sock.recv_into(packet)
 		destination = time.monotonic_ns()
@@ -166,13 +167,20 @@ def update_NTP():
 	pixels.show()
 	seg_print(" UPDATE NTP ")
 	log_info("Update from NTP")
-	wifi.radio.enabled = True
-	log_info("Connect Wifi")
-	connect_wifi(verbose=True)
-	rtc.RTC().datetime = get_ntp_time(socket_pool)
-	time.sleep(0.1)
-	log_info("Turn off Wifi")
-	wifi.radio.enabled = False
+	try:
+		wifi.radio.enabled = True
+		log_info("Connect Wifi")
+		connect_wifi(verbose=True)
+		rtc.RTC().datetime = get_ntp_time(socket_pool)
+		time.sleep(0.1)
+	except Exception as ex:
+		print("Exception")
+		print(ex)
+		seg_print(" NTP FAILED ")
+		time.sleep(2)
+	finally:
+		log_info("Turn off Wifi")
+		wifi.radio.enabled = False
 
 ####################################################################
 # time functions
