@@ -16,10 +16,9 @@ import neopixel
 SPEED_DELAY = 0.1
 SYNC_DELAY = 2 * 60 * 60 # 2h
 
-TZ_OFFSET = 3600 * 2
+TZ_OFFSET = 3600 * 1  # 1 = winter
 NTP_SERVER = "pool.ntp.org"
 NTP_PORT = 123
-TIMEUTILS_SECONDS_1970_TO_2000 = 946_684_800
 
 ####################################################################
 # setup prints
@@ -71,9 +70,6 @@ colors = [
 
 status = neopixel.NeoPixel(board.NEOPIXEL,1)
 status.fill((0,0,0))
-status_power = DigitalInOut(board.NEOPIXEL_POWER)
-status_power.switch_to_output()
-status_power.value = False
 
 i2c = busio.I2C(sda=board.SDA, scl=board.SCL, frequency=400_000)
 display = [
@@ -159,7 +155,7 @@ def get_ntp_time(pool):
 		destination = time.monotonic_ns()
 
 	seconds = struct.unpack_from("!I", packet, offset=len(packet) - 8)[0]
-	monotonic_start = seconds - 2_208_988_800 - (destination // 1_000_000_000) - TIMEUTILS_SECONDS_1970_TO_2000
+	monotonic_start = seconds - 2_208_988_800 - (destination // 1_000_000_000)
 	return time.localtime(time.monotonic_ns() // 1_000_000_000 + monotonic_start + TZ_OFFSET)
 
 def update_NTP():
@@ -266,10 +262,10 @@ try:
 		now = update_time(index // 4 % 2 == 0)
 		defcon = now.tm_sec // 10
 
-		if now.tm_sec % 2 == 0:
-			status.fill(colors[now.tm_sec % 5])
-		else:
-			status.fill(0)
+# 		if now.tm_sec % 2 == 0:
+# 			status.fill(colors[now.tm_sec % 5])
+# 		else:
+# 			status.fill(0)
 
 		pixels.fill(0)
 		for x in range(5):
