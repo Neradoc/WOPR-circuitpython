@@ -9,6 +9,8 @@ import sys
 import time
 import wifi
 import usb_cdc
+import traceback
+import supervisor
 
 import adafruit_ht16k33.segments
 import neopixel
@@ -299,11 +301,10 @@ except Exception as ex:
 	for segment in display:
 		segment.fill(1)
 
-	while not but1.value:
-		if hasattr(sys,"print_exception"):
-			sys.print_exception(ex)
-		else:
-			log_info(ex)
-		time.sleep(0.5)
-	raise
+	while not but1.value and not but2.value:
+		print("-"*70)
+		traceback.print_exception(ex, ex, ex.__traceback__)
+		print("----- Hold button to quit -----")
+		time.sleep(5)
 
+	supervisor.reload()
