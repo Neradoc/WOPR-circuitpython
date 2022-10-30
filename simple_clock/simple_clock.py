@@ -18,9 +18,22 @@ import neopixel
 SPEED_DELAY = 0.1
 SYNC_DELAY = 2 * 60 * 60 # 2h
 
-TZ_OFFSET = 3600 * 1  # 1 = winter
+TZ_OFFSET = 3600 * 2  # 1 = winter / 2 = summer
 NTP_SERVER = "pool.ntp.org"
 NTP_PORT = 123
+
+####################################################################
+# import secrets and config from secrets
+####################################################################
+
+try:
+	from secrets import secrets
+except ImportError:
+	log_info("WiFi secrets are kept in secrets.py, please add them there!")
+	raise
+
+if 'TZ_OFFSET' in secrets:
+	TZ_OFFSET = secrets['TZ_OFFSET'] * 3600
 
 ####################################################################
 # setup prints
@@ -130,11 +143,6 @@ def connect_wifi(verbose=False):
 	global socket_pool
 	import wifi
 	import socketpool
-	try:
-		from secrets import secrets
-	except ImportError:
-		log_info("WiFi secrets are kept in secrets.py, please add them there!")
-		raise
 	if verbose:
 		log_info("Connecting to ", secrets["ssid"])
 	wifi.radio.connect(ssid=secrets["ssid"], password=secrets["password"])
