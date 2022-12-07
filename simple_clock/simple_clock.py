@@ -10,13 +10,20 @@ import time
 import wifi
 import usb_cdc
 import traceback
+import ssl
 import supervisor
 
 import adafruit_ht16k33.segments
+import adafruit_requests
 import neopixel
+
+import home_checkers
 
 SPEED_DELAY = 0.1
 SYNC_DELAY = 2 * 60 * 60 # 2h
+HOME_CHECK_DELAY = 2 * 60 * 60 # 2h
+HOME_CHECK_START_DELAY = 0*60 # wait 1 minutes before doing checks
+HOME_CHECK_PRINT_DELAY = 30
 
 TZ_OFFSET = 3600 * 2  # 1 = winter / 2 = summer
 NTP_SERVER = "pool.ntp.org"
@@ -87,11 +94,7 @@ status = neopixel.NeoPixel(board.NEOPIXEL,1)
 status.fill((0,0,0))
 
 i2c = busio.I2C(sda=board.SDA, scl=board.SCL, frequency=400_000)
-display = [
-	adafruit_ht16k33.segments.Seg14x4(i2c, address=0x70, auto_write=False),
-	adafruit_ht16k33.segments.Seg14x4(i2c, address=0x72, auto_write=False),
-	adafruit_ht16k33.segments.Seg14x4(i2c, address=0x74, auto_write=False),
-]
+display = adafruit_ht16k33.segments.Seg14x4(i2c, address=(0x70, 0x72, 0x74), auto_write=False)
 
 # display a cleaner 5 
 CHARS = list(adafruit_ht16k33.segments.CHARS)
@@ -103,22 +106,18 @@ adafruit_ht16k33.segments.CHARS = tuple(CHARS)
 adafruit_ht16k33.segments.NUMBERS = tuple(NUMBERS)
 
 def seg_brightness(val):
-	for s in display:
-		s.brightness = val
+	display.brightness = val
 
 def seg_show():
-	for s in display:
-		s.show()
+	display.show()
 
 def seg_print(label):
-	buff = [" "] * 12
-	for index,segment in enumerate(display):
-		for char in range(4):
-			pos = index*4+char
-			if pos < len(label):
-				buff[pos] = label[pos]
-		segment.print("".join(buff[index*4:index*4+4]))
+	display.print(label)
 	seg_show()
+
+def seg_scroll(message):
+	display.marquee(message, delay=0.15, loop=False)
+	time.sleep(1)
 
 be_bright = False
 def update_brightness(now):
@@ -138,15 +137,17 @@ def update_brightness(now):
 ####################################################################
 
 socket_pool = None
+requests = None
 
 def connect_wifi(verbose=False):
-	global socket_pool
+	global socket_pool, requests
 	import wifi
 	import socketpool
 	if verbose:
-		log_info("Connecting to ", secrets["ssid"])
+		log_info("Connecting to wifi")
 	wifi.radio.connect(ssid=secrets["ssid"], password=secrets["password"])
 	socket_pool = socketpool.SocketPool(wifi.radio)
+	requests = adafruit_requests.Session(socket_pool, ssl.create_default_context())
 	if verbose:
 		log_info("Connected with IP ", wifi.radio.ipv4_address)
 
@@ -187,6 +188,7 @@ def update_NTP():
 	finally:
 		log_info("Turn off Wifi")
 		wifi.radio.enabled = False
+		requests = None
 
 ####################################################################
 # time functions
@@ -194,9 +196,7 @@ def update_NTP():
 
 week_days = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]
 
-def update_time(show_separator = True):
-	now = time.localtime()
-
+def get_time_string(now, show_separator = True):
 	if show_separator:
 		sep = "."
 	else:
@@ -205,12 +205,61 @@ def update_time(show_separator = True):
 	day = week_days[now.tm_wday].upper()
 	daynum = f"{now.tm_mday:2d}"
 
-	display[0].print(f"{day}{daynum[0]}")
-	display[1].print(f"{daynum[1]} {now.tm_hour:02d}{sep}")
-	display[2].print(f"{now.tm_min:02d}{sep}{now.tm_sec:02d}")
-	seg_show()
+	return (
+		f"{day}{daynum[0]}"
+		+f"{daynum[1]} {now.tm_hour:02d}{sep}"
+		+f"{now.tm_min:02d}{sep}{now.tm_sec:02d}"
+	)
 
+def update_time(show_separator = True):
+	now = time.localtime()
+	time_string = get_time_string(now, show_separator)
+	display.print(time_string)
+	seg_show()
 	return now
+
+####################################################################
+# checks
+####################################################################
+
+check_messages = {}
+
+def display_check_messages():
+	for (ok, check_id, message) in check_messages.values():
+		if not ok:
+			seg_scroll(message)
+
+def do_home_checks():
+	global requests
+	pixels.fill((128,0,255))
+	pixels.show()
+	try:
+		now = time.localtime()
+		time_string = get_time_string(now)
+		seg_print("CHECK" + time_string[5:])
+		wifi.radio.enabled = True
+		connect_wifi(verbose=True)
+		time.sleep(0.1)
+		# do the checks
+		log_info("Perform home checks")
+		res = home_checkers.do_checks(requests)
+		for (ok, check_id, message) in res:
+			if not ok:
+				print(message)
+				check_messages[check_id] = (ok, check_id, message)
+			else:
+				check_messages[check_id] = (True, check_id, "")
+	except Exception as ex:
+		print("Exception")
+		print(ex)
+		traceback.print_exception(ex, ex, ex.__traceback__)
+		seg_print("CHECK FAILED")
+		time.sleep(2)
+	finally:
+		log_info("Turn off Wifi")
+		wifi.radio.enabled = False
+		requests = None
+
 
 ####################################################################
 # startup animation
@@ -242,16 +291,14 @@ def pixcol():
 
 for x in range(2):
 	pixcol()
-	for segment in display:
-		segment.fill(1)
-		time.sleep(0.1)
-		segment.show()
-		pixcol()
-	for segment in display:
-		segment.fill(0)
-		time.sleep(0.1)
-		segment.show()
-		pixcol()
+	display.fill(1)
+	time.sleep(0.1)
+	display.show()
+	pixcol()
+	display.fill(0)
+	time.sleep(0.1)
+	display.show()
+	pixcol()
 
 ####################################################################
 # setup loop variables and parameters
@@ -259,6 +306,8 @@ for x in range(2):
 
 defcon = 0
 next_sync = time.monotonic() + SYNC_DELAY
+next_home_check = time.monotonic() + HOME_CHECK_START_DELAY
+next_home_print = time.monotonic() + HOME_CHECK_PRINT_DELAY
 last_b_update = 0
 
 ####################################################################
@@ -302,12 +351,25 @@ try:
 			update_NTP()
 			next_sync = time.monotonic() + SYNC_DELAY
 
+		if butA.value:
+			check_messages = {}
+			log_info("MESSAGES RESET")
+			seg_scroll("MESSAGES RESET")
+
+		if time.monotonic() > next_home_check:
+			do_home_checks()
+			next_home_check = time.monotonic() + HOME_CHECK_DELAY
+
+		if time.monotonic() > next_home_print:
+			display_check_messages()
+			next_home_print = time.monotonic() + HOME_CHECK_PRINT_DELAY
+
+
 except Exception as ex:
 	pixels.fill((255,0,0))
 	pixels.brightness = 1
 	pixels.show()
-	for segment in display:
-		segment.fill(1)
+	display.fill(1)
 
 	while not but1.value and not but2.value:
 		print("-"*70)
