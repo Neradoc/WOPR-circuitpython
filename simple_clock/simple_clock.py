@@ -22,7 +22,7 @@ import home_checkers
 SPEED_DELAY = 0.1
 SYNC_DELAY = 2 * 60 * 60 # 2h
 HOME_CHECK_DELAY = 2 * 60 * 60 # 2h
-HOME_CHECK_START_DELAY = 0*60 # wait 1 minutes before doing checks
+HOME_CHECK_START_DELAY = 1 * 60 # wait 1 minutes before doing checks
 HOME_CHECK_PRINT_DELAY = 30
 
 TZ_OFFSET = 3600 * 2  # 1 = winter / 2 = summer
