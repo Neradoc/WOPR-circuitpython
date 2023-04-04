@@ -25,7 +25,10 @@ HOME_CHECK_DELAY = 2 * 60 * 60 # 2h
 HOME_CHECK_START_DELAY = 1 * 60 # wait 1 minutes before doing checks
 HOME_CHECK_PRINT_DELAY = 30
 
-TZ_OFFSET = 3600 * 2  # 1 = winter / 2 = summer
+SEASONS = { "WINTER": 0, "SUMMER": 1 }
+SEASON = 0
+
+TZ_OFFSET = 0
 NTP_SERVER = "pool.ntp.org"
 NTP_PORT = 123
 
@@ -41,6 +44,10 @@ except ImportError:
 
 if 'TZ_OFFSET' in secrets:
 	TZ_OFFSET = secrets['TZ_OFFSET'] * 3600
+if "SEASON" in secrets:
+	SEASON = SEASONS[secrets["SEASON"].upper()] * 3600
+
+TZ_OFFSET += SEASON
 
 ####################################################################
 # setup prints
@@ -131,6 +138,16 @@ def update_brightness(now):
 		status.brightness = 1
 	pixels.show()
 	status.show()
+
+def test_display():
+	dt = 0
+	display.auto_write=True
+	for i in range(100_000):
+		t0 = time.monotonic_ns()
+		display.print(f"{dt:06}{dt:06}")
+		t1 = time.monotonic_ns()
+		dt = (t1 - t0) // 1000
+test_display()
 
 ####################################################################
 # setup wifi
