@@ -139,16 +139,6 @@ def update_brightness(now):
 	pixels.show()
 	status.show()
 
-def test_display():
-	dt = 0
-	display.auto_write=True
-	for i in range(100_000):
-		t0 = time.monotonic_ns()
-		display.print(f"{dt:06}{dt:06}")
-		t1 = time.monotonic_ns()
-		dt = (t1 - t0) // 1000
-test_display()
-
 ####################################################################
 # setup wifi
 ####################################################################
@@ -157,6 +147,7 @@ socket_pool = None
 requests = None
 
 def connect_wifi(verbose=False):
+	"""Re-establish the wifi connection"""
 	global socket_pool, requests
 	import wifi
 	import socketpool
@@ -169,6 +160,7 @@ def connect_wifi(verbose=False):
 		log_info("Connected with IP ", wifi.radio.ipv4_address)
 
 def get_ntp_time(pool):
+	"""Get time from NTP server the low level way"""
 	packet = bytearray(48)
 	packet[0] = 0b00100011
 
@@ -187,6 +179,7 @@ def get_ntp_time(pool):
 	return time.localtime(time.monotonic_ns() // 1_000_000_000 + monotonic_start + TZ_OFFSET)
 
 def update_NTP():
+	"""The NTP update procedure, with screen indications and such"""
 	pixels.fill((0,128,255))
 	pixels.show()
 	seg_print(" UPDATE NTP ")
@@ -214,6 +207,7 @@ def update_NTP():
 week_days = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]
 
 def get_time_string(now, show_separator = True):
+	"""Format the time string with optional separator"""
 	if show_separator:
 		sep = "."
 	else:
@@ -229,6 +223,7 @@ def get_time_string(now, show_separator = True):
 	)
 
 def update_time(show_separator = True):
+	"""Update the time on the screen"""
 	now = time.localtime()
 	time_string = get_time_string(now, show_separator)
 	display.print(time_string)
@@ -242,11 +237,13 @@ def update_time(show_separator = True):
 check_messages = {}
 
 def display_check_messages():
+	"""Display the check messages"""
 	for (ok, check_id, message) in check_messages.values():
 		if not ok:
 			seg_scroll(message)
 
 def do_home_checks():
+	"""Call the home checkers functions that do... whatever they do"""
 	global requests
 	pixels.fill((128,0,255))
 	pixels.show()
