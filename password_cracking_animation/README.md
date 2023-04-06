@@ -1,4 +1,4 @@
-Animation that mimics movive password cracking: each character shows quickly changing scrambled letters scrolling from the right, until one by one each letter of the passord settles.
+Animation that mimics movie password cracking: each character shows quickly changing scrambled letters scrolling from the right, until one by one each letter of the passord settles.
 
 Install word directories
 
