@@ -1,6 +1,16 @@
+# SPDX-FileCopyrightText: Copyright 2023 Neradoc, https://neradoc.me
+# SPDX-License-Identifier: MIT
+"""
+Pick random "passwords", scroll random characters, decode the password.
+- The probability of a character being decoded in each loop is a function
+  of TIME_DECODING and other parameters to get a reasonnable average time.
+- Increases the probability of decoding the longer it goes above the target time.
+- Button A decodes a character.
+- Button B resets the decoding session (not the password).
+"""
 import board
 import busio
-from digitalio import DigitalInOut, Pull
+import keypad
 import os
 import random
 import time
@@ -10,18 +20,21 @@ import adafruit_ht16k33.segments
 import neopixel
 
 """
-FIND:
-	when thea scrolling character matches a password character, reveal
-RANDOM:
-	randomly generate then password when revealed
-AUTO:
-	automatic reveal of a character from the password on every outer loop
-DICT:
-	get new password from the dictionnary of 12 letters words
+When the scrolling character matches a password character, reveal.
+If False, just scrolls letters, pretty pointless.
 """
-MODES = ["FIND", "RANDOM", "DICT"]
+FIND_MODE = True
+"""Progressively increase the probabilities of instant decoding for a character"""
+ACCELERATE_WHEN_NOT_FOUND = True
+"""Loop sleep."""
 SPEED_DELAY = 0.01
-TIME_DECODING = 12
+"""Target time of decoding."""
+TIME_DECODING = 30
+"""
+If no word list files are available, use the list of builtins.
+If set to False, use completely a random word instead.
+"""
+USE_BUILTINS = True
 
 ####################################################################
 # setup wifi
@@ -33,32 +46,18 @@ wifi.radio.enabled = False
 # setup buttons
 ####################################################################
 
-butA = DigitalInOut(board.IO38)
-butA.switch_to_input(Pull.DOWN)
-butB = DigitalInOut(board.IO33)
-butB.switch_to_input(Pull.DOWN)
-but1 = DigitalInOut(board.IO6)
-but1.switch_to_input(Pull.DOWN)
-but2 = DigitalInOut(board.IO5)
-but2.switch_to_input(Pull.DOWN)
-
-buttons = [
-	[butA,"BUTA"],
-	[butB,"BUTB"],
-	[but1,"BUT1"],
-	[but2,"BUT2"],
-]
+buttons = keypad.Keys(
+	(board.IO38, board.IO33, board.IO6, board.IO5),
+	value_when_pressed = True
+)
+BUT1, BUT2, BUTA, BUTB = range(4)
 
 ####################################################################
 # setup displays and blinkies
 ####################################################################
 
 i2c = busio.I2C(sda=board.SDA, scl=board.SCL, frequency=400_000)
-display = [
-	adafruit_ht16k33.segments.Seg14x4(i2c, address=0x70),
-	adafruit_ht16k33.segments.Seg14x4(i2c, address=0x72),
-	adafruit_ht16k33.segments.Seg14x4(i2c, address=0x74),
-]
+display = adafruit_ht16k33.segments.Seg14x4(i2c, address=(0x70, 0x72, 0x74))
 
 pixels = neopixel.NeoPixel(board.IO7,5,auto_write = False)
 pixels.fill((0,0,0))
@@ -72,13 +71,10 @@ colors = [
 	(255,0,0),
 ]
 
-for x in range(2):
-	for segment in display:
-		segment.fill(1)
-		time.sleep(0.1)
-	for segment in display:
-		segment.fill(0)
-		time.sleep(0.1)
+for x in "*.*.*.*.*.*.*.*.*.*.*.*.*.*.*.*.            ":
+	display.print(x)
+	time.sleep(0.01)
+display.fill(0)
 
 ####################################################################
 # setup words and passwords
@@ -93,6 +89,32 @@ symbols = "@#*$&+-=/:,?!"
 charas = symbols + upper_letters + digits + lower_letters
 
 passsymbols = "0123456789" "@*$+-="
+
+import builtins
+# get default passwords from builtins
+# I don't think we can capture help("modules"), that's a shame
+default_passwords = [x[:12].upper() for x in dir(builtins) if x[0] != "_"]
+
+
+def pass_from_keywords():
+	# pick words until they don't fit
+	word = random.choice(default_passwords)
+	words = [word]
+	full_size = len(word)
+	while len(words) < 3 and full_size < 12:
+		word = random.choice(default_passwords)
+		if len(word) + full_size > 12:
+			break
+		words.append(word)
+		full_size += len(word)
+	# add random characters
+	while full_size < 12:
+		words.append(random.choice(passsymbols))
+		full_size += 1
+	# stick words
+	words.sort(key=lambda x: random.random())
+	return "".join(words)
+
 
 def make_password():
 	passe = [ random.choice(conson) ]
@@ -110,52 +132,57 @@ def make_password():
 				passe.append(random.choice(vowels))
 	return passe
 
+# get the word files and organize them by size
 password_files = [["",0]] * 14
 password_sizes = set()
 for x in range(14):
-	filename = f"dicts/dict-{x}.txt"
+	filename = f"words/words-{x}.txt"
 	try:
 		n_passwords = os.stat(filename)[6] // (x+1) # is gonna fail if not exists
-		password_files[x] = [filename,n_passwords]
+		password_files[x] = [filename, n_passwords]
 		password_sizes.add(x)
-	except OSError:
-		password_files[x] = ["",0]
+	except OSError as err:
+		password_files[x] = ["", 0]
 
 def password_from_dict():
 	# make sizes
 	full_size = 0
-	sizes = []
-	while full_size < 12 and 12 - full_size >= min(password_sizes):
-		size = random.choice([x for x in password_sizes if x <= 12 - full_size])
-		sizes.append(size)
-		full_size += size
-
-	password = ""
-	# a 33% chance to start with a number or symbol if not full
-	if full_size < 12 and random.random() < 0.33:
-		password += random.choice(passsymbols)
-		full_size += 1
-	# stick words
-	for size in sizes:
+	words = []
+	# pick up to 3 random words that fit the size
+	while full_size < 12:
+		# pick a random word that fits in the remaining space
+		size = random.choice([
+			x for x in password_sizes
+			if x <= 12 - full_size
+		])
+		# get the word from the file
 		with open(password_files[size][0],"r") as fp:
 			pos_word = random.randint(0,password_files[size][1])
 			fp.seek( pos_word * ( size + 1 ) )
-			password += fp.read(size).upper()
-		# if not full, add separator
-		if full_size < 12:
-			password += random.choice(passsymbols)
-			full_size += 1
-	# if still not full, fill with numbers and symbols
+			word = fp.read(size).strip().upper()
+		# append and count the word
+		words.append(word)
+		full_size += len(word)
+		# stop when there's no space left or we already picked 3 words
+		if (12 - full_size) < min(password_sizes): break
+		if len(words) == 3: break
+	# add random characters
 	while full_size < 12:
-		password += random.choice(passsymbols)
+		words.append(random.choice(passsymbols))
 		full_size += 1
-
-	return password
+	# stick words
+	words.sort(key=lambda x: random.random())
+	return "".join(words)
 
 def get_password():
-	if "DICT" in MODES:
+	if password_sizes:
+		# use files to get a password
 		password = password_from_dict()
+	elif USE_BUILTINS:
+		# use builtin names for passwords
+		password = pass_from_keywords()
 	else:
+		# no files, generate random password
 		password = make_password()
 	return [x for x in password]
 
@@ -163,17 +190,17 @@ def get_password():
 # setup loop variables and parameters
 ####################################################################
 
-CHANCES_DECODING = len(charas) * SPEED_DELAY / 2 * (12 / TIME_DECODING)
-CHANCES_DECODING = max(0.1, min(1.0, CHANCES_DECODING))
+# chances_decoding * num_charas * TIME_DECODING / SPEED_DELAY = 1
+CHANCES_DECODING = len(charas) * SPEED_DELAY / (12 * TIME_DECODING)
 average_time = 0
 
-print("CHANCES_DECODING",CHANCES_DECODING)
+print("CHANCES_DECODING", CHANCES_DECODING)
 
-# fixed password
-password = [x for x in "MOUTARDE 007"]
-if "RANDOM" in MODES:
-	password = get_password()
-#
+# first password
+# password = [x for x in "MOUTARDE 007"]
+password = get_password()
+
+chances_decoding = CHANCES_DECODING
 screen_texte = [random.choice(charas) for x in range(12)]
 ring = 0
 not_decoded = set(range(12))
@@ -185,56 +212,54 @@ start_time = time.monotonic_ns()
 ####################################################################
 
 while True:
+	current_time = time.monotonic_ns()
+	took = (current_time - start_time) // 1000 // 1000 / 1000
+	precent_time = (TIME_DECODING - took) / TIME_DECODING
+
 	# scroll
 	ring = (ring + 1) % 12
 	screen_texte[ring] = random.choice(charas)
 	#
 	buff = ["."] * 12
-	for index,segment in enumerate(display):
-		still_coded = False
+	still_coded = False
 
-		for char in range(4):
-			pos = index*4+char
+	for char in range(12):
+		# reveal password characters that match the scrolling text
+		if FIND_MODE:
+			if random.random() < chances_decoding:
+				if char in not_decoded:
+					not_decoded.remove(char)
+					# a character can only match once
+					screen_texte[(ring+char)%12] = "*"
+					# force update the segment in case it's all decoded
+					still_coded |= True
+					# reset the autowin
+					chances_decoding = CHANCES_DECODING
 
-			# reveal password characters that match the scrolling text
-			if "FIND" in MODES:
-				if screen_texte[(ring+pos)%12] == password[pos]\
-					and random.random() < CHANCES_DECODING:
-					if pos in not_decoded:
-						not_decoded.remove(pos)
-						# a character can only match once
-						screen_texte[(ring+pos)%12] = "*"
-						# force update the segment in case it's all decoded
-						still_coded |= True
+		# display scrolling or decoded character
+		if char in not_decoded:
+			still_coded |= True
+			buff[char] = screen_texte[(ring+char)%12]
+		else:
+			buff[char] = password[char]
 
-			# display scrolling or decoded character
-			if pos in not_decoded:
-				still_coded |= True
-				buff[pos] = screen_texte[(ring+pos)%12]
-			else:
-				buff[pos] = password[pos]
-
-		# send I2C only once per segment, if it's not finished
-		if still_coded:
-			segment.print("".join(buff[index*4:index*4+4]))
+	# send I2C only if it's not finished
+	if still_coded:
+		display.print("".join(buff))
 
 	################################################################
 	# buttons
-	for btn in buttons:
-		if btn[0].value:
-			# button 2 speeds up decoding
-			if btn[0] == but2:
-				num = random.choice(list(not_decoded))
-				not_decoded.remove(num)
-				screen_texte[(ring+num)%12] = "*"
-				while but2.value:
-					time.sleep(0.01)
-			# button 1 resets
-			if btn[0] == but1:
-				not_decoded = set(range(12))
-				while but1.value:
-					time.sleep(0.01)
-			print("Pressed", btn[1])
+	while event := buttons.events.get():
+		if event.pressed and event.key_number == BUTA:
+			# decode one character
+			num = random.choice(list(not_decoded))
+			not_decoded.remove(num)
+			screen_texte[(ring+num)%12] = "*"
+			print("Decode", num)
+		if event.pressed and event.key_number == BUTB:
+			# reset
+			not_decoded = set(range(12))
+			print("Recode")
 
 	################################################################
 	# password decoded
@@ -246,13 +271,9 @@ while True:
 			average_time = took
 		else:
 			average_time = (average_time + 3 * took) / 4
-		if average_time < 0.85 * TIME_DECODING:
-			CHANCES_DECODING *= 1.02
-		if average_time > 1.15 * TIME_DECODING:
-			CHANCES_DECODING /= 1.02
 		#
 		print("The password was:","".join(password),f"decoded in {took:.3f} s")
-		print("Average:",average_time,"Chance:",CHANCES_DECODING)
+		print(f"Average: {average_time}s")
 		#
 		for x in range(4):
 			pixels.brightness = 0.01
@@ -263,16 +284,19 @@ while True:
 			time.sleep(0.25)
 		not_decoded = set(range(12))
 
-		if "RANDOM" in MODES:
-			password = get_password()
+		# new password
+		password = get_password()
+		chances_decoding = CHANCES_DECODING
+		button_speedup = False
 
 		start_time = time.monotonic_ns()
 	else:
 		############################################################
-		# decode a random character
-		if "AUTO" in MODES:
-			num = random.choice(list(not_decoded))
-			not_decoded.remove(num)
+		
+		# adapt the chances of decoding to make it not too long
+		if ACCELERATE_WHEN_NOT_FOUND:
+			if took > TIME_DECODING:
+				chances_decoding += 0.001
 
 	################################################################
 	# display the progression of decoding via defcon LEDs
